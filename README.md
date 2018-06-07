@@ -26,7 +26,7 @@ SynthDef(\gestureTest, {
 )
 
 //Load pipeline from file
-GestureRT.loadPipeline("/Users/johannes/kod/supercollider/grtplugin/GRT_V0.1_18_OSX/pipeline.txt", ~synth)
+GestureRT.loadPipeline("pipeline.txt", ~synth)
 
 
 //Stop
