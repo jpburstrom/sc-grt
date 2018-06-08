@@ -1,6 +1,6 @@
-# GestureRt
+# sc-grt
 
-A SuperCollider UGen which uses predefined pipelines and datasets, which can be generated in the GRT UI application. See http://www.nickgillian.com/wiki/pmwiki.php/GRT/GestureRecognitionToolkit for more info about GRT.
+GestureRT is a SuperCollider UGen, wrapping the Gesture Recognition Toolkit. It uses predefined pipelines and datasets, which can be generated in the GRT UI application. See http://www.nickgillian.com/wiki/pmwiki.php/GRT/GestureRecognitionToolkit for more info about GRT.
 
 
 The workflow:
