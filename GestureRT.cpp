@@ -1,5 +1,5 @@
 #include "SC_PlugIn.h"
-#include "grt/grt.h"
+#include "GRT.h"
 
 // InterfaceTable contains pointers to functions in the host (server).
 static InterfaceTable *ft;
