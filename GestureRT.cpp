@@ -126,6 +126,7 @@ void GestureRTLoadDataset(Unit *gesture, struct sc_msg_iter *args) {
     GestureRT * unit = (GestureRT*) gesture; 
     const char * path = args->gets();
     GRT::RegressionData trainingData;
+    //FIXME not realtime safe
     if ( trainingData.loadDatasetFromFile(path) ){
         if ( unit->pipeline->train(trainingData) ) {
             if(unit->mWorld->mVerbosity > -1) {
@@ -147,6 +148,7 @@ void GestureRTLoadPipeline(Unit *gesture, struct sc_msg_iter *args) {
     //TODO: Load data with u_cmd
     GestureRT * unit = (GestureRT*) gesture; 
     const char * path = args->gets();
+    //FIXME: not realtime safe.
     if ( unit->pipeline->load(path) ){
         SETCALC(GestureRT_next);
     } else {
