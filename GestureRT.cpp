@@ -96,21 +96,25 @@ void GestureRT_next(GestureRT* unit, int inNumSamples) {
 
     int inputCount = IN0(0);
     float* outbuf = OUT(0);
-
+    bool changed = false;
+    float tmp;
     
     //for (int i = 0; i < (int)inputCount; i++) {
     for (int i = 0; i < inputCount; i++) {
 
-        unit->inputVector[0][i] = IN0(i+1);
+        tmp = IN0(i+1);
+
+        if (tmp != unit->inputVector[0][i]) {
+            unit->inputVector[0][i] = tmp; 
+            changed = true;
+        }
     }
 
-    if (unit->pipeline->getIsInitialized()) {
+    if (changed) {
         if (unit->pipeline->predict(*(unit->inputVector))) {
             *(unit->outputVector) = (unit->pipeline->getRegressionData());
             outbuf[0] = unit->outputVector[0][0];
         }
-    } else {
-        outbuf[0] = 0.0;
     }
 
 }
