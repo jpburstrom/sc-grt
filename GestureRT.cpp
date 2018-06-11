@@ -11,7 +11,6 @@ struct GestureRT : public Unit {
     //GRT::RegressionData* trainingData;     
     GRT::LogisticRegression* regression;
     GRT::GestureRecognitionPipeline* pipeline;
-    //TODO: set size of vectors
     GRT::VectorFloat* inputVector; 
     GRT::VectorFloat* outputVector;
 };
@@ -53,20 +52,17 @@ void GestureRT_Ctor(GestureRT* unit) {
     }
 
     //Create a new logistic regression module
-    //TODO: Load pipeline data from grt file
-    ///
     const bool scaleData = true;
     const GRT::Float learningRate = 1.2;
     const GRT::Float minChange = 0.01;
     const GRT::UINT batchSize = 20;
     const GRT::UINT maxNumEpochs = 100;
+
+    //FIXME memory allocation test
     unit->regression = new(RTAlloc(unit->mWorld, sizeof(GRT::LogisticRegression))) GRT::LogisticRegression(scaleData,learningRate,minChange,batchSize,maxNumEpochs);
     unit->pipeline = new(RTAlloc(unit->mWorld, sizeof(GRT::GestureRecognitionPipeline))) GRT::GestureRecognitionPipeline();
 
     unit->pipeline->setRegressifier(*(unit->regression));
-
-
-
 
     // Set calc function to put out dummy zeroes until pipeline is trained.
     SETCALC(GestureRT_next_noTrain);
