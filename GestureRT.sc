@@ -2,7 +2,7 @@ GestureRT : UGen {
 
 
     *kr { |inputs|
-        ^this.multiNew('control', inputs.size, *inputs);
+        ^this.multiNew('control', inputs.size.max(1), *inputs);
     }
 
     *loadPipeline { |path, synth, server|
