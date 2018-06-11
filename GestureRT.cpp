@@ -28,9 +28,10 @@ void GestureRTLoadDataset (Unit *unit, struct sc_msg_iter *args);
 // the constructor function is called when a Synth containing this ugen is played.
 // it MUST be named "PluginName_Ctor", and the argument must be "unit."
 void GestureRT_Ctor(GestureRT* unit) {
-    // in later examples, we will initialize state variables here.
-    //
-    int inputVectorSize = 3;
+
+    //Set input vector size to size of input array
+    int inputVectorSize = IN0(0);
+    //Output currently hard coded
     int outputVectorSize = 1;
 
 
