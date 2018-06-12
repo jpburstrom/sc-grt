@@ -168,16 +168,19 @@ void GestureRTLoadDataset(Unit *gesture, struct sc_msg_iter *args) {
     GestureRT * unit = (GestureRT*) gesture; 
     const char * path = args->gets();
     GRT::RegressionData trainingData;
+
     //FIXME not realtime safe
-    if ( trainingData.loadDatasetFromFile(path) ){
-        if ( unit->pipeline->train(trainingData) ) {
-            if(unit->mWorld->mVerbosity > -1) {
-                Print("Pipeline trained\n");
+    if (unit->pipeline != NULL) {
+        if ( trainingData.loadDatasetFromFile(path) ){
+            if ( unit->pipeline->train(trainingData) ) {
+                if(unit->mWorld->mVerbosity > -1) {
+                    Print("Pipeline trained\n");
+                }
             }
-        }
-    } else {
-        if(unit->mWorld->mVerbosity > -2) {
-            Print("WARNING: Failed to load training data from file");
+        } else {
+            if(unit->mWorld->mVerbosity > -2) {
+                Print("WARNING: Failed to load training data from file");
+            }
         }
     }
 
@@ -189,19 +192,22 @@ void GestureRTLoadPipeline(Unit *gesture, struct sc_msg_iter *args) {
     GestureRT * unit = (GestureRT*) gesture; 
     const char * path = args->gets();
     //FIXME: not realtime safe.
-    if ( unit->pipeline->load(path) ){
-        if (unit->pipeline->getIsPipelineInRegressionMode()) {
+    if (unit->pipeline != NULL) {
+        if ( unit->pipeline->load(path) ){
+            if (unit->pipeline->getIsPipelineInRegressionMode()) {
+                unit->grtTask = TASK_REGRESSION;
+            } else if (unit->pipeline->getIsPipelineInClassificationMode()) {
+                unit->grtTask = TASK_CLASSIFICATION;
+            }
 
-            unit->grtTask = TASK_REGRESSION;
-        } else if (unit->pipeline->getIsPipelineInClassificationMode()) {
-            unit->grtTask = TASK_CLASSIFICATION;
+            SETCALC(GestureRT_next);
+        } else {
+            if(unit->mWorld->mVerbosity > -2) {
+                Print("WARNING: Failed to load pipeline from file");
+            }
         }
-
-        SETCALC(GestureRT_next);
     } else {
-        if(unit->mWorld->mVerbosity > -2) {
-            Print("WARNING: Failed to load pipeline from file");
-        }
+        Print("WARNING: Failed to load pipeline from file");
     }
 
 }
