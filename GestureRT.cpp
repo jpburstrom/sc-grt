@@ -9,15 +9,14 @@ struct GestureRT : public Unit {
     // in later examples, we will declare state variables here.
     int inputCount;
     //GRT::RegressionData* trainingData;     
-    GRT::LogisticRegression* regression;
     GRT::GestureRecognitionPipeline* pipeline;
     GRT::VectorFloat* inputVector; 
-    GRT::VectorFloat* outputVector;
 };
 
 // older plugins wrap these function declarations in 'extern "C" { ... }'
 // no need to do that these days.
-static void GestureRT_next(GestureRT* unit, int inNumSamples);
+static void GestureRT_next_reg(GestureRT* unit, int inNumSamples);
+static void GestureRT_next_class(GestureRT* unit, int inNumSamples);
 static void GestureRT_next_noTrain(GestureRT* unit, int inNumSamples);
 static void GestureRT_Ctor(GestureRT* unit);
 
@@ -30,18 +29,15 @@ void GestureRT_Ctor(GestureRT* unit) {
 
     //Set input vector size to size of input array
     int inputVectorSize = IN0(0);
-    //Output currently hard coded
-    int outputVectorSize = 1;
 
 
     DefineUnitCmd("GestureRT", "loadDataset", GestureRTLoadDataset);
     DefineUnitCmd("GestureRT", "loadPipeline", GestureRTLoadPipeline);
 
     unit->inputVector = new(RTAlloc(unit->mWorld, sizeof(GRT::VectorFloat) * inputVectorSize)) GRT::VectorFloat(inputVectorSize);
-    unit->outputVector = new(RTAlloc(unit->mWorld, sizeof(GRT::VectorFloat) * outputVectorSize)) GRT::VectorFloat(outputVectorSize);
+    unit->pipeline = new(RTAlloc(unit->mWorld, sizeof(GRT::GestureRecognitionPipeline))) GRT::GestureRecognitionPipeline();
 
-
-    if ((unit->inputVector == NULL) || (unit->outputVector == NULL)) {
+    if ((unit->inputVector == NULL) || (unit->pipeline == NULL)) {
         SETCALC(ft->fClearUnitOutputs);
         ClearUnitOutputs(unit, 1);
 
@@ -51,18 +47,6 @@ void GestureRT_Ctor(GestureRT* unit) {
         return;
     }
 
-    //Create a new logistic regression module
-    const bool scaleData = true;
-    const GRT::Float learningRate = 1.2;
-    const GRT::Float minChange = 0.01;
-    const GRT::UINT batchSize = 20;
-    const GRT::UINT maxNumEpochs = 100;
-
-    //FIXME memory allocation test
-    unit->regression = new(RTAlloc(unit->mWorld, sizeof(GRT::LogisticRegression))) GRT::LogisticRegression(scaleData,learningRate,minChange,batchSize,maxNumEpochs);
-    unit->pipeline = new(RTAlloc(unit->mWorld, sizeof(GRT::GestureRecognitionPipeline))) GRT::GestureRecognitionPipeline();
-
-    unit->pipeline->setRegressifier(*(unit->regression));
 
     // Set calc function to put out dummy zeroes until pipeline is trained.
     SETCALC(GestureRT_next_noTrain);
@@ -75,8 +59,6 @@ void GestureRT_Ctor(GestureRT* unit) {
 void GestureRT_Dtor(GestureRT* unit) {
     // Free the memory.
     RTFree(unit->mWorld, unit->inputVector);
-    RTFree(unit->mWorld, unit->outputVector);
-    RTFree(unit->mWorld, unit->regression);
     RTFree(unit->mWorld, unit->pipeline);
     //RTFree(unit->mWorld, unit->trainingData);
 }
@@ -89,7 +71,7 @@ void GestureRT_next_noTrain(GestureRT* unit, int inNumSamples) {
     outbuf[0] = 0.0;
 }
 
-void GestureRT_next(GestureRT* unit, int inNumSamples) {
+void GestureRT_next_reg(GestureRT* unit, int inNumSamples) {
 
     int inputCount = IN0(0);
     float* outbuf = OUT(0);
@@ -109,8 +91,32 @@ void GestureRT_next(GestureRT* unit, int inNumSamples) {
 
     if (changed) {
         if (unit->pipeline->predict(*(unit->inputVector))) {
-            *(unit->outputVector) = (unit->pipeline->getRegressionData());
-            outbuf[0] = unit->outputVector[0][0];
+            outbuf[0] = unit->pipeline->getRegressionData()[0];
+        }
+    }
+
+}
+void GestureRT_next_class(GestureRT* unit, int inNumSamples) {
+
+    int inputCount = IN0(0);
+    float* outbuf = OUT(0);
+    bool changed = false;
+    float tmp;
+    
+    //for (int i = 0; i < (int)inputCount; i++) {
+    for (int i = 0; i < inputCount; i++) {
+
+        tmp = IN0(i+1);
+
+        if (tmp != unit->inputVector[0][i]) {
+            unit->inputVector[0][i] = tmp; 
+            changed = true;
+        }
+    }
+
+    if (changed) {
+        if (unit->pipeline->predict(*(unit->inputVector))) {
+            outbuf[0] = unit->pipeline->getPredictedClassLabel();
         }
     }
 
@@ -129,7 +135,11 @@ void GestureRTLoadDataset(Unit *gesture, struct sc_msg_iter *args) {
             if(unit->mWorld->mVerbosity > -1) {
                 Print("Pipeline trained\n");
             }
-            SETCALC(GestureRT_next);
+            if (unit->pipeline->getIsPipelineInRegressionMode()) {
+                SETCALC(GestureRT_next_reg);
+            } else if (unit->pipeline->getIsPipelineInClassificationMode()) {
+                SETCALC(GestureRT_next_class);
+            }
         }
     } else {
         if(unit->mWorld->mVerbosity > -2) {
@@ -142,12 +152,15 @@ void GestureRTLoadDataset(Unit *gesture, struct sc_msg_iter *args) {
 //Load dataset from file
 void GestureRTLoadPipeline(Unit *gesture, struct sc_msg_iter *args) {
     //std::cout << "GestureRT Version: " << GRTBase::getGRTVersion() << std::endl;
-    //TODO: Load data with u_cmd
     GestureRT * unit = (GestureRT*) gesture; 
     const char * path = args->gets();
     //FIXME: not realtime safe.
     if ( unit->pipeline->load(path) ){
-        SETCALC(GestureRT_next);
+        if (unit->pipeline->getIsPipelineInRegressionMode()) {
+            SETCALC(GestureRT_next_reg);
+        } else if (unit->pipeline->getIsPipelineInClassificationMode()) {
+            SETCALC(GestureRT_next_class);
+        }
     } else {
         if(unit->mWorld->mVerbosity > -2) {
             Print("WARNING: Failed to load pipeline from file");
