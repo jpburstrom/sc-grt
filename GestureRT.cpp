@@ -3,7 +3,7 @@
 #include "SC_PlugIn.h"
 #include "GRT.h"
 
-#define INTERVAL 250
+#define INTERVAL 2.5
 
 enum tasks {
     TASK_STOP = 0,
