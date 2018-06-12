@@ -1,5 +1,19 @@
+#include <pthread.h>
+#include "SC_Lock.h"
 #include "SC_PlugIn.h"
 #include "GRT.h"
+
+#define INTERVAL 250
+
+enum tasks {
+    TASK_STOP = 0,
+    TASK_IDLE = 1,
+    TASK_REGRESSION = 2,
+    TASK_CLASSIFICATION = 3,
+    TASK_LOADPIPELINE = 4,
+    TASK_LOADDATASET = 5,
+    TASK_INIT = 6
+};
 
 // InterfaceTable contains pointers to functions in the host (server).
 static InterfaceTable *ft;
@@ -8,15 +22,61 @@ static InterfaceTable *ft;
 struct GestureRT : public Unit {
     // in later examples, we will declare state variables here.
     int inputCount;
+    int currentTask;
+    int grtTask = TASK_REGRESSION;
+    float output;
+    pthread_t grtThread;
     //GRT::RegressionData* trainingData;     
     GRT::GestureRecognitionPipeline* pipeline;
     GRT::VectorFloat* inputVector; 
 };
 
+//Threading stuff
+void *grt_update_func(void *param) {
+
+    GestureRT * unit = (GestureRT*) param; 
+
+    while (unit->currentTask > TASK_STOP) {
+
+        switch (unit->currentTask) {
+            case TASK_IDLE: //idle
+                break;
+
+            case TASK_REGRESSION: //regression
+                if (unit->pipeline->predict(*(unit->inputVector))) {
+                    unit->output = unit->pipeline->getRegressionData()[0];
+                }
+                break;
+
+            case TASK_CLASSIFICATION: //classification
+                if (unit->pipeline->predict(*(unit->inputVector))) {
+                    unit->output = unit->pipeline->getPredictedClassLabel();
+                }
+
+                break;
+            case TASK_LOADPIPELINE: //loadPipeline
+
+                break;
+            case TASK_LOADDATASET: //loadDataset
+
+                break;
+
+            case TASK_INIT: //init
+                break;
+        };
+
+        unit->currentTask = TASK_IDLE;
+        //Do stuff
+
+        std::this_thread::sleep_for( std::chrono::duration<float, std::milli>(INTERVAL)  );
+    }
+    //We need to return something
+    return NULL;
+}
+
 // older plugins wrap these function declarations in 'extern "C" { ... }'
 // no need to do that these days.
-static void GestureRT_next_reg(GestureRT* unit, int inNumSamples);
-static void GestureRT_next_class(GestureRT* unit, int inNumSamples);
+static void GestureRT_next(GestureRT* unit, int inNumSamples);
 static void GestureRT_next_noTrain(GestureRT* unit, int inNumSamples);
 static void GestureRT_Ctor(GestureRT* unit);
 
@@ -30,12 +90,19 @@ void GestureRT_Ctor(GestureRT* unit) {
     //Set input vector size to size of input array
     int inputVectorSize = IN0(0);
 
+    unit->currentTask = 1;
+
+    pthread_create(&(unit->grtThread), NULL, grt_update_func, unit);
+
 
     DefineUnitCmd("GestureRT", "loadDataset", GestureRTLoadDataset);
     DefineUnitCmd("GestureRT", "loadPipeline", GestureRTLoadPipeline);
 
     unit->inputVector = new(RTAlloc(unit->mWorld, sizeof(GRT::VectorFloat) * inputVectorSize)) GRT::VectorFloat(inputVectorSize);
     unit->pipeline = new(RTAlloc(unit->mWorld, sizeof(GRT::GestureRecognitionPipeline))) GRT::GestureRecognitionPipeline();
+
+
+    unit->output = 0.0f;
 
     if ((unit->inputVector == NULL) || (unit->pipeline == NULL)) {
         SETCALC(ft->fClearUnitOutputs);
@@ -58,6 +125,8 @@ void GestureRT_Ctor(GestureRT* unit) {
 // this must be named PluginName_Dtor.
 void GestureRT_Dtor(GestureRT* unit) {
     // Free the memory.
+    unit->currentTask = TASK_STOP;
+    pthread_join(unit->grtThread, NULL);
     RTFree(unit->mWorld, unit->inputVector);
     RTFree(unit->mWorld, unit->pipeline);
     //RTFree(unit->mWorld, unit->trainingData);
@@ -67,14 +136,12 @@ void GestureRT_Dtor(GestureRT* unit) {
 // this function is called every control period (64 samples is typical)
 // Don't change the names of the arguments, or the helper macros won't work.
 void GestureRT_next_noTrain(GestureRT* unit, int inNumSamples) {
-    float* outbuf = OUT(0);
-    outbuf[0] = 0.0;
+    OUT(0)[0] = unit->output;
 }
 
-void GestureRT_next_reg(GestureRT* unit, int inNumSamples) {
+void GestureRT_next(GestureRT* unit, int inNumSamples) {
 
     int inputCount = IN0(0);
-    float* outbuf = OUT(0);
     bool changed = false;
     float tmp;
     
@@ -85,40 +152,12 @@ void GestureRT_next_reg(GestureRT* unit, int inNumSamples) {
 
         if (tmp != unit->inputVector[0][i]) {
             unit->inputVector[0][i] = tmp; 
-            changed = true;
+            unit->currentTask = unit->grtTask;
+            break;
         }
     }
 
-    if (changed) {
-        if (unit->pipeline->predict(*(unit->inputVector))) {
-            outbuf[0] = unit->pipeline->getRegressionData()[0];
-        }
-    }
-
-}
-void GestureRT_next_class(GestureRT* unit, int inNumSamples) {
-
-    int inputCount = IN0(0);
-    float* outbuf = OUT(0);
-    bool changed = false;
-    float tmp;
-    
-    //for (int i = 0; i < (int)inputCount; i++) {
-    for (int i = 0; i < inputCount; i++) {
-
-        tmp = IN0(i+1);
-
-        if (tmp != unit->inputVector[0][i]) {
-            unit->inputVector[0][i] = tmp; 
-            changed = true;
-        }
-    }
-
-    if (changed) {
-        if (unit->pipeline->predict(*(unit->inputVector))) {
-            outbuf[0] = unit->pipeline->getPredictedClassLabel();
-        }
-    }
+    OUT(0)[0] = unit->output;
 
 }
 
@@ -134,11 +173,6 @@ void GestureRTLoadDataset(Unit *gesture, struct sc_msg_iter *args) {
         if ( unit->pipeline->train(trainingData) ) {
             if(unit->mWorld->mVerbosity > -1) {
                 Print("Pipeline trained\n");
-            }
-            if (unit->pipeline->getIsPipelineInRegressionMode()) {
-                SETCALC(GestureRT_next_reg);
-            } else if (unit->pipeline->getIsPipelineInClassificationMode()) {
-                SETCALC(GestureRT_next_class);
             }
         }
     } else {
@@ -157,10 +191,13 @@ void GestureRTLoadPipeline(Unit *gesture, struct sc_msg_iter *args) {
     //FIXME: not realtime safe.
     if ( unit->pipeline->load(path) ){
         if (unit->pipeline->getIsPipelineInRegressionMode()) {
-            SETCALC(GestureRT_next_reg);
+
+            unit->grtTask = TASK_REGRESSION;
         } else if (unit->pipeline->getIsPipelineInClassificationMode()) {
-            SETCALC(GestureRT_next_class);
+            unit->grtTask = TASK_CLASSIFICATION;
         }
+
+        SETCALC(GestureRT_next);
     } else {
         if(unit->mWorld->mVerbosity > -2) {
             Print("WARNING: Failed to load pipeline from file");
@@ -171,10 +208,14 @@ void GestureRTLoadPipeline(Unit *gesture, struct sc_msg_iter *args) {
 
 
 
+
+
 // the entry point is called by the host when the plug-in is loaded
 PluginLoad(GestureRTUGens) {
     // InterfaceTable *inTable implicitly given as argument to the load function
     ft = inTable; // store pointer to InterfaceTable
+
+
     // DefineSimpleUnit is one of four macros defining different kinds of ugens.
     // In later examples involving memory allocation, we'll see DefineDtorUnit.
     // You can disable aliasing by using DefineSimpleCantAliasUnit and DefineDtorCantAliasUnit.
