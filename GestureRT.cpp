@@ -1,12 +1,15 @@
 #include <pthread.h>
 #include "SC_Lock.h"
 #include "SC_PlugIn.h"
+#include "SC_SyncCondition.h"
 #include "GRT.h"
+
+#include <boost/lockfree/spsc_queue.hpp>
 
 #define INTERVAL 2.5
 
 enum tasks {
-    taskStop = 0,
+    taskQuit = 0,
     taskIdle = 1,
     taskRegression = 2,
     taskClassification = 3,
@@ -18,6 +21,7 @@ enum tasks {
 // InterfaceTable contains pointers to functions in the host (server).
 static InterfaceTable *ft;
 
+
 // declare struct to hold unit generator state
 struct GestureRT : public Unit {
     // in later examples, we will declare state variables here.
@@ -26,11 +30,15 @@ struct GestureRT : public Unit {
     int grtTask = taskRegression;
     char filePath[PATH_MAX];
     float output;
-    pthread_t grtThread;
     //GRT::RegressionData* trainingData;     
     GRT::GestureRecognitionPipeline* pipeline;
     GRT::VectorFloat* inputVector; 
 };
+
+pthread_t grtThread;
+std::atomic<bool> threadRunning;
+SC_SyncCondition grtSync;
+boost::lockfree::spsc_queue<GestureRT*, boost::lockfree::capacity<256> > grtFifo;
 
 // older plugins wrap these function declarations in 'extern "C" { ... }'
 // no need to do that these days.
@@ -44,89 +52,94 @@ void GestureRTLoadDataset (Unit *unit, struct sc_msg_iter *args);
 //Threading stuff
 void *grt_update_func(void *param) {
 
-    GestureRT * unit = (GestureRT*) param; 
+    while (threadRunning.load()) {
 
-    while (unit->currentTask > taskStop) {
+        grtSync.WaitEach();
 
-        switch (unit->currentTask) {
+        GestureRT* unit;
 
-            case taskIdle: //idle
-                break;
+        bool popSucceeded = grtFifo.pop(unit);
 
-            case taskRegression: //regression
-                if (unit->pipeline->predict(*(unit->inputVector))) {
-                    unit->output = unit->pipeline->getRegressionData()[0];
-                }
-                break;
+        if (popSucceeded) {
 
-            case taskClassification: //classification
-                if (unit->pipeline->predict(*(unit->inputVector))) {
-                    unit->output = unit->pipeline->getPredictedClassLabel();
-                }
+            switch (unit->currentTask) {
 
-                break;
-            case taskLoadPipeline: //loadPipeline
+                case taskIdle: //idle
+                    break;
 
-                Print("load pipeline\n");
-                //FIXME: not realtime safe.
-                if (unit->pipeline != NULL) {
-                    if ( unit->pipeline->load(unit->filePath) ){
-                        if (unit->pipeline->getIsPipelineInRegressionMode()) {
-                            unit->grtTask = taskRegression;
-                        } else if (unit->pipeline->getIsPipelineInClassificationMode()) {
-                            unit->grtTask = taskClassification;
-                        }
-
-                        SETCALC(GestureRT_next);
-                    } else {
-                        if(unit->mWorld->mVerbosity > -2) {
-                            Print("WARNING: Failed to load pipeline from file");
-                        }
+                case taskRegression: //regression
+                    if (unit->pipeline->predict(*(unit->inputVector))) {
+                        unit->output = unit->pipeline->getRegressionData()[0];
                     }
-                } else {
-                    Print("WARNING: Failed to load pipeline from file");
-                }
+                    break;
 
-                break;
-
-            case taskLoadDataset: //loadDataset
-                {
-                    GRT::RegressionData trainingData;
-
-                    //FIXME not realtime safe
-                    if (unit->pipeline != NULL) {
-                        if ( trainingData.loadDatasetFromFile(unit->filePath) ){
-                            if ( unit->pipeline->train(trainingData) ) {
-                                if(unit->mWorld->mVerbosity > -1) {
-                                    Print("Pipeline trained\n");
-                                }
-                            }
-                        } else {
-                            if(unit->mWorld->mVerbosity > -2) {
-                                Print("WARNING: Failed to load training data from file");
-                            }
-                        }
+                case taskClassification: //classification
+                    if (unit->pipeline->predict(*(unit->inputVector))) {
+                        unit->output = unit->pipeline->getPredictedClassLabel();
                     }
 
                     break;
-                }
+                case taskLoadPipeline: //loadPipeline
 
-            case taskInit:
-                std::cout << "initing\n";
-                unit->pipeline = new(RTAlloc(unit->mWorld, sizeof(GRT::GestureRecognitionPipeline))) GRT::GestureRecognitionPipeline();
-                break;
+                    //FIXME: not realtime safe.
+                    if (unit->pipeline != NULL) {
+                        if ( unit->pipeline->load(unit->filePath) ){
+                            if (unit->pipeline->getIsPipelineInRegressionMode()) {
+                                unit->grtTask = taskRegression;
+                            } else if (unit->pipeline->getIsPipelineInClassificationMode()) {
+                                unit->grtTask = taskClassification;
+                            }
 
-        };
+                            SETCALC(GestureRT_next);
+                        } else {
+                            if(unit->mWorld->mVerbosity > -2) {
+                                Print("WARNING: Failed to load pipeline from file");
+                            }
+                        }
+                    } else {
+                        Print("WARNING: Failed to load pipeline from file");
+                    }
 
-        unit->currentTask = taskIdle;
-        //Do stuff
+                    break;
 
-        std::this_thread::sleep_for( std::chrono::duration<float, std::milli>(INTERVAL)  );
+                case taskLoadDataset: //loadDataset
+                    {
+                        GRT::RegressionData trainingData;
+
+                        //FIXME not realtime safe
+                        if (unit->pipeline != NULL) {
+                            if ( trainingData.loadDatasetFromFile(unit->filePath) ){
+                                if ( unit->pipeline->train(trainingData) ) {
+                                    if(unit->mWorld->mVerbosity > -1) {
+                                        Print("Pipeline trained\n");
+                                    }
+                                }
+                            } else {
+                                if(unit->mWorld->mVerbosity > -2) {
+                                    Print("WARNING: Failed to load training data from file");
+                                }
+                            }
+                        }
+
+                        break;
+                    }
+
+                case taskInit:
+                    unit->pipeline = new(RTAlloc(unit->mWorld, sizeof(GRT::GestureRecognitionPipeline))) GRT::GestureRecognitionPipeline();
+                    break;
+
+                case taskQuit:
+                    RTFree(unit->mWorld, unit->pipeline);
+                    break;
+
+            };
+
+            unit->currentTask = taskIdle;
+            //Do stuff
+
+        }
+
     }
-
-
-    RTFree(unit->mWorld, unit->pipeline);
-
 
     //We need to return something
     return NULL;
@@ -137,14 +150,14 @@ void *grt_update_func(void *param) {
 // it MUST be named "PluginName_Ctor", and the argument must be "unit."
 void GestureRT_Ctor(GestureRT* unit) {
 
-    Print ("constructor start");
     //Set input vector size to size of input array
     int inputVectorSize = IN0(0);
 
     unit->currentTask = taskInit;
-    pthread_create(&(unit->grtThread), NULL, grt_update_func, unit);
+    if (grtFifo.push(unit)) {
+        grtSync.Signal();
+    };
 
-    Print ("pthread created");
 
     DefineUnitCmd("GestureRT", "loadDataset", GestureRTLoadDataset);
     DefineUnitCmd("GestureRT", "loadPipeline", GestureRTLoadPipeline);
@@ -154,7 +167,7 @@ void GestureRT_Ctor(GestureRT* unit) {
 
     unit->output = 0.0f;
 
-    if ((unit->inputVector == NULL)) {
+    if (unit->inputVector == NULL) {
         SETCALC(ft->fClearUnitOutputs);
         ClearUnitOutputs(unit, 1);
 
@@ -175,10 +188,11 @@ void GestureRT_Ctor(GestureRT* unit) {
 // this must be named PluginName_Dtor.
 void GestureRT_Dtor(GestureRT* unit) {
     // Free the memory.
-    unit->currentTask = taskStop;
-    pthread_join(unit->grtThread, NULL);
     RTFree(unit->mWorld, unit->inputVector);
-    //RTFree(unit->mWorld, unit->trainingData);
+    unit->currentTask = taskQuit;
+    if (grtFifo.push(unit)) {
+        grtSync.Signal();
+    };
 }
 
 // the calculation function can have any name, but this is conventional. the first argument must be "unit."
@@ -201,10 +215,16 @@ void GestureRT_next(GestureRT* unit, int inNumSamples) {
 
         if (tmp != unit->inputVector[0][i]) {
             unit->inputVector[0][i] = tmp; 
-            unit->currentTask = unit->grtTask;
-            break;
+            changed = true;
         }
     }
+
+    if (changed) {
+        unit->currentTask = unit->grtTask;
+        if (grtFifo.push(unit)) {
+            grtSync.Signal();
+        };
+    };
 
     OUT(0)[0] = unit->output;
 
@@ -212,25 +232,29 @@ void GestureRT_next(GestureRT* unit, int inNumSamples) {
 
 //Load dataset from file
 void GestureRTLoadDataset(Unit *gesture, struct sc_msg_iter *args) {
-    //std::cout << "GestureRT Version: " << GRTBase::getGRTVersion() << std::endl;
     //TODO: Load data with u_cmd
     GestureRT * unit = (GestureRT*) gesture; 
 
 	strcpy(unit->filePath, args->gets());
 
     unit->currentTask = taskLoadDataset;
+    if (grtFifo.push(unit)) {
+        grtSync.Signal();
+    };
 
 
 }
 
 //Load dataset from file
 void GestureRTLoadPipeline(Unit *gesture, struct sc_msg_iter *args) {
-    //std::cout << "GestureRT Version: " << GRTBase::getGRTVersion() << std::endl;
     GestureRT * unit = (GestureRT*) gesture; 
 
 	strcpy(unit->filePath, args->gets());
 
     unit->currentTask = taskLoadPipeline;
+    if (grtFifo.push(unit)) {
+        grtSync.Signal();
+    };
     
 
 }
@@ -244,11 +268,19 @@ PluginLoad(GestureRTUGens) {
     // InterfaceTable *inTable implicitly given as argument to the load function
     ft = inTable; // store pointer to InterfaceTable
 
-    Print("Loading grt\n");
+    threadRunning.store(true);
+    pthread_create(&grtThread, NULL, grt_update_func, NULL);
 
 
     // DefineSimpleUnit is one of four macros defining different kinds of ugens.
     // In later examples involving memory allocation, we'll see DefineDtorUnit.
     // You can disable aliasing by using DefineSimpleCantAliasUnit and DefineDtorCantAliasUnit.
     DefineDtorUnit(GestureRT);
+}
+
+C_LINKAGE SC_API_EXPORT void unload(InterfaceTable *inTable)
+{
+    //FIXME stop thread loop
+    threadRunning.store(false);
+    pthread_join(grtThread, NULL);
 }

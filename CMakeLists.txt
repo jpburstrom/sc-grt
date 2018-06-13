@@ -8,6 +8,7 @@ project (${PROJECT})
 include_directories(${SC_PATH}/include/plugin_interface)
 include_directories(${SC_PATH}/include/common)
 include_directories(${SC_PATH}/common)
+include_directories(${SC_PATH}/external_libraries/boost)
 include_directories(${GRT_PATH})
 
 set(CMAKE_SHARED_MODULE_PREFIX "")
