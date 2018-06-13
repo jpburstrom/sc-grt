@@ -3,6 +3,7 @@
 #include "SC_PlugIn.h"
 #include "SC_SyncCondition.h"
 #include "GRT.h"
+#include <mutex>
 
 #include <boost/lockfree/spsc_queue.hpp>
 
@@ -39,6 +40,7 @@ pthread_t grtThread;
 std::atomic<bool> threadRunning;
 SC_SyncCondition grtSync;
 boost::lockfree::spsc_queue<GestureRT*, boost::lockfree::capacity<256> > grtFifo;
+std::mutex mu;
 
 // older plugins wrap these function declarations in 'extern "C" { ... }'
 // no need to do that these days.
@@ -68,37 +70,38 @@ void *grt_update_func(void *param) {
                     break;
 
                 case taskRegression: //regression
-                    if (unit->pipeline->predict(*(unit->inputVector))) {
-                        unit->output = unit->pipeline->getRegressionData()[0];
+                    if (unit->inputVector != NULL) {
+                        if (unit->pipeline->predict(*(unit->inputVector))) {
+                            unit->output = unit->pipeline->getRegressionData()[0];
+                        }
                     }
                     break;
 
                 case taskClassification: //classification
-                    if (unit->pipeline->predict(*(unit->inputVector))) {
-                        unit->output = unit->pipeline->getPredictedClassLabel();
+                    if (unit->inputVector != NULL) {
+                        if (unit->pipeline->predict(*(unit->inputVector))) {
+                            unit->output = unit->pipeline->getPredictedClassLabel();
+                        }
                     }
 
                     break;
+
                 case taskLoadPipeline: //loadPipeline
 
-                    //FIXME: not realtime safe.
-                    if (unit->pipeline != NULL) {
-                        if ( unit->pipeline->load(unit->filePath) ){
-                            if (unit->pipeline->getIsPipelineInRegressionMode()) {
-                                unit->grtTask = taskRegression;
-                            } else if (unit->pipeline->getIsPipelineInClassificationMode()) {
-                                unit->grtTask = taskClassification;
-                            }
-
-                            SETCALC(GestureRT_next);
-                        } else {
-                            if(unit->mWorld->mVerbosity > -2) {
-                                Print("WARNING: Failed to load pipeline from file");
-                            }
+                    if ( unit->pipeline->load(unit->filePath) ){
+                        if (unit->pipeline->getIsPipelineInRegressionMode()) {
+                            unit->grtTask = taskRegression;
+                        } else if (unit->pipeline->getIsPipelineInClassificationMode()) {
+                            unit->grtTask = taskClassification;
                         }
+
+                        SETCALC(GestureRT_next);
                     } else {
-                        Print("WARNING: Failed to load pipeline from file");
+                        if(unit->mWorld->mVerbosity > -2) {
+                            Print("WARNING: Failed to load pipeline from file");
+                        }
                     }
+
 
                     break;
 
@@ -125,11 +128,10 @@ void *grt_update_func(void *param) {
                     }
 
                 case taskInit:
-                    unit->pipeline = new(RTAlloc(unit->mWorld, sizeof(GRT::GestureRecognitionPipeline))) GRT::GestureRecognitionPipeline();
+
                     break;
 
                 case taskQuit:
-                    RTFree(unit->mWorld, unit->pipeline);
                     break;
 
             };
@@ -153,17 +155,13 @@ void GestureRT_Ctor(GestureRT* unit) {
     //Set input vector size to size of input array
     int inputVectorSize = IN0(0);
 
-    unit->currentTask = taskInit;
-    if (grtFifo.push(unit)) {
-        grtSync.Signal();
-    };
-
+    unit->currentTask = taskIdle;
 
     DefineUnitCmd("GestureRT", "loadDataset", GestureRTLoadDataset);
     DefineUnitCmd("GestureRT", "loadPipeline", GestureRTLoadPipeline);
 
     unit->inputVector = new(RTAlloc(unit->mWorld, sizeof(GRT::VectorFloat) * inputVectorSize)) GRT::VectorFloat(inputVectorSize);
-
+    unit->pipeline = new(RTAlloc(unit->mWorld, sizeof(GRT::GestureRecognitionPipeline))) GRT::GestureRecognitionPipeline();
 
     unit->output = 0.0f;
 
@@ -193,6 +191,9 @@ void GestureRT_Dtor(GestureRT* unit) {
     if (grtFifo.push(unit)) {
         grtSync.Signal();
     };
+    if (unit->pipeline != NULL) {
+        RTFree(unit->mWorld, unit->pipeline);
+    }
 }
 
 // the calculation function can have any name, but this is conventional. the first argument must be "unit."
@@ -235,7 +236,9 @@ void GestureRTLoadDataset(Unit *gesture, struct sc_msg_iter *args) {
     //TODO: Load data with u_cmd
     GestureRT * unit = (GestureRT*) gesture; 
 
-	strcpy(unit->filePath, args->gets());
+    mu.lock();
+	strncpy(unit->filePath, args->gets(), PATH_MAX);
+    mu.unlock();
 
     unit->currentTask = taskLoadDataset;
     if (grtFifo.push(unit)) {
@@ -249,12 +252,14 @@ void GestureRTLoadDataset(Unit *gesture, struct sc_msg_iter *args) {
 void GestureRTLoadPipeline(Unit *gesture, struct sc_msg_iter *args) {
     GestureRT * unit = (GestureRT*) gesture; 
 
-	strcpy(unit->filePath, args->gets());
+    if (unit->pipeline != NULL) {
+        strncpy(unit->filePath, args->gets(), PATH_MAX);
 
-    unit->currentTask = taskLoadPipeline;
-    if (grtFifo.push(unit)) {
-        grtSync.Signal();
-    };
+        unit->currentTask = taskLoadPipeline;
+        if (grtFifo.push(unit)) {
+            grtSync.Signal();
+        };
+    }
     
 
 }
@@ -282,5 +287,8 @@ C_LINKAGE SC_API_EXPORT void unload(InterfaceTable *inTable)
 {
     //FIXME stop thread loop
     threadRunning.store(false);
+    //RTFree(unit->mWorld, unit->pipeline);
+    //0.1.wait;
+    grtSync.Signal();       
     pthread_join(grtThread, NULL);
 }
