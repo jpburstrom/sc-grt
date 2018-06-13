@@ -90,24 +90,30 @@ void *grt_update_func(void *param) {
                 break;
 
             case taskLoadDataset: //loadDataset
+                {
+                    GRT::RegressionData trainingData;
 
-                GRT::RegressionData trainingData;
-
-                //FIXME not realtime safe
-                if (unit->pipeline != NULL) {
-                    if ( trainingData.loadDatasetFromFile(unit->filePath) ){
-                        if ( unit->pipeline->train(trainingData) ) {
-                            if(unit->mWorld->mVerbosity > -1) {
-                                Print("Pipeline trained\n");
+                    //FIXME not realtime safe
+                    if (unit->pipeline != NULL) {
+                        if ( trainingData.loadDatasetFromFile(unit->filePath) ){
+                            if ( unit->pipeline->train(trainingData) ) {
+                                if(unit->mWorld->mVerbosity > -1) {
+                                    Print("Pipeline trained\n");
+                                }
+                            }
+                        } else {
+                            if(unit->mWorld->mVerbosity > -2) {
+                                Print("WARNING: Failed to load training data from file");
                             }
                         }
-                    } else {
-                        if(unit->mWorld->mVerbosity > -2) {
-                            Print("WARNING: Failed to load training data from file");
-                        }
                     }
+
+                    break;
                 }
 
+            case taskInit:
+                std::cout << "initing\n";
+                unit->pipeline = new(RTAlloc(unit->mWorld, sizeof(GRT::GestureRecognitionPipeline))) GRT::GestureRecognitionPipeline();
                 break;
 
         };
@@ -117,6 +123,11 @@ void *grt_update_func(void *param) {
 
         std::this_thread::sleep_for( std::chrono::duration<float, std::milli>(INTERVAL)  );
     }
+
+
+    RTFree(unit->mWorld, unit->pipeline);
+
+
     //We need to return something
     return NULL;
 }
@@ -126,24 +137,24 @@ void *grt_update_func(void *param) {
 // it MUST be named "PluginName_Ctor", and the argument must be "unit."
 void GestureRT_Ctor(GestureRT* unit) {
 
+    Print ("constructor start");
     //Set input vector size to size of input array
     int inputVectorSize = IN0(0);
 
-    unit->currentTask = 1;
-
+    unit->currentTask = taskInit;
     pthread_create(&(unit->grtThread), NULL, grt_update_func, unit);
 
+    Print ("pthread created");
 
     DefineUnitCmd("GestureRT", "loadDataset", GestureRTLoadDataset);
     DefineUnitCmd("GestureRT", "loadPipeline", GestureRTLoadPipeline);
 
     unit->inputVector = new(RTAlloc(unit->mWorld, sizeof(GRT::VectorFloat) * inputVectorSize)) GRT::VectorFloat(inputVectorSize);
-    unit->pipeline = new(RTAlloc(unit->mWorld, sizeof(GRT::GestureRecognitionPipeline))) GRT::GestureRecognitionPipeline();
 
 
     unit->output = 0.0f;
 
-    if ((unit->inputVector == NULL) || (unit->pipeline == NULL)) {
+    if ((unit->inputVector == NULL)) {
         SETCALC(ft->fClearUnitOutputs);
         ClearUnitOutputs(unit, 1);
 
@@ -167,7 +178,6 @@ void GestureRT_Dtor(GestureRT* unit) {
     unit->currentTask = taskStop;
     pthread_join(unit->grtThread, NULL);
     RTFree(unit->mWorld, unit->inputVector);
-    RTFree(unit->mWorld, unit->pipeline);
     //RTFree(unit->mWorld, unit->trainingData);
 }
 
@@ -233,6 +243,8 @@ void GestureRTLoadPipeline(Unit *gesture, struct sc_msg_iter *args) {
 PluginLoad(GestureRTUGens) {
     // InterfaceTable *inTable implicitly given as argument to the load function
     ft = inTable; // store pointer to InterfaceTable
+
+    Print("Loading grt\n");
 
 
     // DefineSimpleUnit is one of four macros defining different kinds of ugens.
