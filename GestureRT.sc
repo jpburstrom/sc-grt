@@ -5,18 +5,18 @@ GestureRT : UGen {
         ^this.multiNew('control', inputs.size.max(1), *inputs);
     }
 
-    *loadPipeline { |path, synth, server|
+    *loadPipeline { |path, synth, server, synthdef|
         server = server ?? { Server.default };
-        SynthDescLib.global[synth.defName.asSymbol].def.children.do {|val,i|
+		(synthdef ?? { SynthDescLib.global[synth.defName.asSymbol].def }).children.do {|val,i|
             if(val.class == this) {
                 server.sendMsg(\u_cmd, synth.nodeID, i, "loadPipeline", path)
             };
         }
     }
 
-    *loadDataset { |path, synth, server|
+    *loadDataset { |path, synth, server, synthdef|
         server = server ?? { Server.default };
-        SynthDescLib.global[synth.defName.asSymbol].def.children.do {|val,i|
+        (synthdef ?? { SynthDescLib.global[synth.defName.asSymbol].def }).children.do {|val,i|
             if(val.class == this) {
                 server.sendMsg(\u_cmd, synth.nodeID, i, "loadDataset", path)
             };
