@@ -3,7 +3,6 @@
 #include "SC_PlugIn.h"
 #include "SC_SyncCondition.h"
 #include "GRT.h"
-#include <mutex>
 
 #include <boost/lockfree/spsc_queue.hpp>
 
@@ -40,7 +39,6 @@ pthread_t grtThread;
 std::atomic<bool> threadRunning;
 SC_SyncCondition grtSync;
 boost::lockfree::spsc_queue<GestureRT*, boost::lockfree::capacity<256> > grtFifo;
-std::mutex mu;
 
 // older plugins wrap these function declarations in 'extern "C" { ... }'
 // no need to do that these days.
@@ -236,9 +234,7 @@ void GestureRTLoadDataset(Unit *gesture, struct sc_msg_iter *args) {
     //TODO: Load data with u_cmd
     GestureRT * unit = (GestureRT*) gesture; 
 
-    mu.lock();
 	strncpy(unit->filePath, args->gets(), PATH_MAX);
-    mu.unlock();
 
     unit->currentTask = taskLoadDataset;
     if (grtFifo.push(unit)) {
